@@ -1,7 +1,8 @@
 const { getSupabase } = require("./lib/supabase");
 
-const SIGMA_BASE    = "https://api.sigmapayments.com.br/api/v1";
-const SIGMA_API_KEY = process.env.SIGMA_API_KEY;
+const POSEIDON_BASE       = "https://app.poseidonpay.site/api/v1/gateway/pix/receive";
+const POSEIDON_PUBLIC_KEY = process.env.POSEIDON_PUBLIC_KEY;
+const POSEIDON_SECRET_KEY = process.env.POSEIDON_SECRET_KEY;
 
 function jsonResponse(statusCode, body) {
   return {
@@ -16,27 +17,23 @@ function jsonResponse(statusCode, body) {
   };
 }
 
-function normalizeAmountCents(rawAmount) {
-  if (rawAmount == null) return 3720;
+function normalizeAmount(rawAmount) {
+  if (rawAmount == null) return 39.70;
   const n = Number(rawAmount);
-  if (!Number.isFinite(n)) return 3720;
-  // Se for número com casas decimais (ex: 37.20, 74.9) = reais → centavos
-  if (!Number.isInteger(n)) return Math.round(n * 100);
-  // Se for inteiro pequeno (< 100) = reais → centavos
-  if (n < 100) return Math.round(n * 100);
-  // Se for inteiro grande (>= 100) = já em centavos
-  return Math.round(n);
+  if (!Number.isFinite(n)) return 39.70;
+  if (!Number.isInteger(n)) return n;
+  if (n < 100) return n;
+  return n / 100;
 }
 
-// Gera CPF matematicamente válido
 function gerarCpfValido() {
   const n = () => Math.floor(Math.random() * 9);
   const d = Array.from({ length: 9 }, n);
   let s1 = d.reduce((a, v, i) => a + v * (10 - i), 0);
-  let r1 = (s1 * 10) % 11; if (r1 === 10 || r1 === 11) r1 = 0;
+  let r1 = (s1 * 10) % 11; if (r1 >= 10) r1 = 0;
   d.push(r1);
   let s2 = d.reduce((a, v, i) => a + v * (11 - i), 0);
-  let r2 = (s2 * 10) % 11; if (r2 === 10 || r2 === 11) r2 = 0;
+  let r2 = (s2 * 10) % 11; if (r2 >= 10) r2 = 0;
   d.push(r2);
   return d.join('');
 }
@@ -88,40 +85,46 @@ exports.handler = async (event) => {
   const randDigits = (len) => Array.from({ length: len }, () => Math.floor(Math.random() * 10)).join("");
   const randId = randDigits(6);
 
-  const rawAmount   = body.amount ?? body.valor ?? body.total ?? 3720;
-  const amountCents = normalizeAmountCents(rawAmount);
+  const rawAmount   = body.amount ?? body.valor ?? body.total ?? 39.70;
+  const amountReais = normalizeAmount(rawAmount);
 
   const customerName  = (body.nome || body.name || body.customer_name || `Cliente ${randId}`).toString().trim();
   const customerEmail = (body.email || body.customer_email || `cliente${randId}@gmail.com`).toString().trim();
   const rawPhone      = (body.phone || body.customer_phone || `11${randDigits(9)}`).toString().replace(/\D/g, "");
-  const customerPhone = rawPhone.startsWith("55") ? `+${rawPhone}` : `+55${rawPhone}`;
+  const customerPhone = `(${rawPhone.slice(0,2)}) ${rawPhone.slice(2,7)}-${rawPhone.slice(7,11)}`;
   const cpfRaw        = (body.cpf || body.document || body.customer_cpf || "").toString().replace(/\D/g, "");
   const customerCpf   = cpfRaw.length === 11 ? cpfRaw : gerarCpfValido();
 
-  // Captura UTMs se vierem no body
-  const utm = body.utm || {};
+  const identifier = `pedido-${randId}-${Date.now()}`;
+  const dueDate    = new Date(Date.now() + 86400000).toISOString().split("T")[0];
 
   const payload = {
-    amount:        amountCents,
-    description:   "Livro Falante",
-    paymentMethod: "pix",
-    customer: {
+    identifier,
+    amount:   amountReais,
+    dueDate,
+    client: {
       name:     customerName,
       email:    customerEmail,
-      document: customerCpf,
       phone:    customerPhone,
-      ...(Object.keys(utm).length > 0 ? { utm } : {}),
+      document: customerCpf,
     },
+    products: [{
+      id:       "livro-falante-001",
+      name:     "Livro Falante",
+      quantity: 1,
+      price:    amountReais,
+    }],
   };
 
   const headers = {
-    "Content-Type": "application/json",
-    "X-API-Key":    SIGMA_API_KEY,
+    "Content-Type":  "application/json",
+    "x-public-key":  POSEIDON_PUBLIC_KEY,
+    "x-secret-key":  POSEIDON_SECRET_KEY,
   };
 
   let resp;
   try {
-    resp = await postWithRetry(`${SIGMA_BASE}/direct-payments`, payload, headers);
+    resp = await postWithRetry(POSEIDON_BASE, payload, headers);
   } catch (err) {
     return jsonResponse(502, { success: false, error: "Falha ao conectar com gateway: " + String(err) });
   }
@@ -131,26 +134,25 @@ exports.handler = async (event) => {
     return jsonResponse(resp.status, { success: false, error: text || "Erro ao criar cobrança PIX", raw: text });
   }
 
-  let parsed = {};
-  try { parsed = JSON.parse(text); } catch {
+  let data = {};
+  try { data = JSON.parse(text); } catch {
     return jsonResponse(500, { success: false, error: "Resposta inválida da gateway", raw: text });
   }
 
-  const data = parsed.data || parsed;
-
-  // SigmaPay retorna: transaction_id, payment_data.pix_key
-  const transactionId = data.transaction_id || data.id || null;
-  const pixCode       = data.payment_data?.pix_key || data.pix_code || data.brcode || null;
+  // Poseidon retorna: transactionId, pix.code, pix.base64
+  const transactionId = data.transactionId || data.order?.id || null;
+  const pixCode       = data.pix?.code || null;
+  const qrCodeImage   = data.pix?.base64 || data.pix?.image || null;
 
   try {
     const supabase = getSupabase();
     await supabase.from("transactions").insert({
       transaction_id: transactionId,
-      amount:         amountCents / 100,
+      amount:         amountReais,
       customer_name:  customerName,
       customer_email: customerEmail,
       customer_cpf:   customerCpf,
-      customer_phone: customerPhone,
+      customer_phone: rawPhone,
       status:         "PENDING",
       brcode:         pixCode,
     });
@@ -162,7 +164,7 @@ exports.handler = async (event) => {
     pix_code:       pixCode,
     brcode:         pixCode,
     payload:        pixCode,
-    qr_code_image:  null,
+    qr_code_image:  qrCodeImage,
     transaction_id: transactionId,
     transactionId,
     deposit_id:     transactionId,

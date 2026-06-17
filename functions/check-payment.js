@@ -1,19 +1,20 @@
 const { getSupabase } = require("./lib/supabase");
 
-const SIGMA_BASE    = "https://api.sigmapayments.com.br/api/v1";
-const SIGMA_API_KEY = process.env.SIGMA_API_KEY;
+const POSEIDON_TRANSACTIONS = "https://app.poseidonpay.site/api/v1/gateway/transactions";
+const POSEIDON_PUBLIC_KEY   = process.env.POSEIDON_PUBLIC_KEY;
+const POSEIDON_SECRET_KEY   = process.env.POSEIDON_SECRET_KEY;
 
 const UTMIFY_TOKEN = "EAAakRBooZBQABRp8xaEz9T5H3YBvyq1JumM6Ie1LgCUQHERsBOBuo4ZA7WiVfnQ1hdmmpnM14JnsZC7tuAyHxCcEjwKnuGGiOlpL5PtZAovEWD72zPEtFhP49wewKXuhoXeQx5RKczdHZAyKr8Va7jrpk3MNMgT9XDT3hGv5KlnYq3ML2I57tyMrbOvtWugZDZD";
 
 async function sendUtmifyOrder(txData, transactionId, paidAt) {
   try {
-    const amountCents     = Math.round((txData.amount || 37.20) * 100);
+    const amountCents     = Math.round((txData.amount || 39.70) * 100);
     const gatewayFeeCents = Math.round(amountCents * 0.015);
     const netCents        = amountCents - gatewayFeeCents;
 
     const payload = {
       orderId:       transactionId,
-      platform:      "SigmaPay",
+      platform:      "PoseidonPay",
       paymentMethod: "pix",
       status:        "paid",
       createdAt:     txData.created_at || new Date().toISOString().replace("T", " ").slice(0, 19),
@@ -28,7 +29,7 @@ async function sendUtmifyOrder(txData, transactionId, paidAt) {
         ip:       null,
       },
       products: [{
-        id:           "cnh-brasil-001",
+        id:           "livro-falante-001",
         name:         "Livro Falante",
         planId:       null,
         planName:     null,
@@ -108,11 +109,14 @@ exports.handler = async (event) => {
   let statusResp;
   let text = "";
   try {
-    // SigmaPay: GET /api/v1/payments/:id/status (rota pública)
-    statusResp = await fetch(`${SIGMA_BASE}/payments/${encodeURIComponent(transactionId)}/status`, {
+    // Poseidon: GET /api/v1/gateway/transactions?id={transactionId}
+    statusResp = await fetch(`${POSEIDON_TRANSACTIONS}?id=${encodeURIComponent(transactionId)}`, {
       method:  "GET",
-      headers: { "X-API-Key": SIGMA_API_KEY },
-      signal:  controller.signal,
+      headers: {
+        "x-public-key": POSEIDON_PUBLIC_KEY,
+        "x-secret-key": POSEIDON_SECRET_KEY,
+      },
+      signal: controller.signal,
     });
     text = await statusResp.text();
   } catch (err) {
@@ -122,20 +126,18 @@ exports.handler = async (event) => {
     clearTimeout(timeout);
   }
 
-  let parsed = {};
-  try { parsed = JSON.parse(text); } catch { parsed = {}; }
+  let data = {};
+  try { data = JSON.parse(text); } catch { data = {}; }
 
   if (!statusResp.ok) {
     return jsonResponse(statusResp.status, { success: false, error: text || "Erro ao consultar pagamento" });
   }
 
-  const data = parsed.data || parsed;
-
-  // SigmaPay status: PENDING | AUTHORIZED | REJECTED | FAILED
+  // Poseidon status: PENDING | COMPLETED | FAILED | REFUNDED | CHARGED_BACK
   const rawStatus = (data.status || "PENDING").toUpperCase();
-  const paid      = rawStatus === "AUTHORIZED";
+  const paid      = rawStatus === "COMPLETED";
   const status    = paid ? "paid" : rawStatus.toLowerCase();
-  const paidAt    = data.paid_at || null;
+  const paidAt    = data.payedAt || null;
 
   try {
     const supabase = getSupabase();
