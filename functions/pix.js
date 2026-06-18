@@ -1,8 +1,7 @@
 const { getSupabase } = require("./lib/supabase");
 
-const POSEIDON_BASE       = "https://app.poseidonpay.site/api/v1/gateway/pix/receive";
-const POSEIDON_PUBLIC_KEY = process.env.POSEIDON_PUBLIC_KEY;
-const POSEIDON_SECRET_KEY = process.env.POSEIDON_SECRET_KEY;
+const SIGMA_BASE    = "https://api.sigmapayments.com.br/api/v1";
+const SIGMA_API_KEY = process.env.SIGMA_API_KEY;
 
 function jsonResponse(statusCode, body) {
   return {
@@ -17,13 +16,13 @@ function jsonResponse(statusCode, body) {
   };
 }
 
-function normalizeAmount(rawAmount) {
-  if (rawAmount == null) return 39.70;
+function normalizeAmountCents(rawAmount) {
+  if (rawAmount == null) return 3840;
   const n = Number(rawAmount);
-  if (!Number.isFinite(n)) return 39.70;
-  if (!Number.isInteger(n)) return n;
-  if (n < 100) return n;
-  return n / 100;
+  if (!Number.isFinite(n)) return 3840;
+  if (!Number.isInteger(n)) return Math.round(n * 100);
+  if (n < 100) return Math.round(n * 100);
+  return Math.round(n);
 }
 
 function gerarCpfValido() {
@@ -85,46 +84,36 @@ exports.handler = async (event) => {
   const randDigits = (len) => Array.from({ length: len }, () => Math.floor(Math.random() * 10)).join("");
   const randId = randDigits(6);
 
-  const rawAmount   = body.amount ?? body.valor ?? body.total ?? 39.70;
-  const amountReais = normalizeAmount(rawAmount);
+  const rawAmount   = body.amount ?? body.valor ?? body.total ?? 3840;
+  const amountCents = normalizeAmountCents(rawAmount);
 
   const customerName  = (body.nome || body.name || body.customer_name || `Cliente ${randId}`).toString().trim();
   const customerEmail = (body.email || body.customer_email || `cliente${randId}@gmail.com`).toString().trim();
   const rawPhone      = (body.phone || body.customer_phone || `11${randDigits(9)}`).toString().replace(/\D/g, "");
-  const customerPhone = `(${rawPhone.slice(0,2)}) ${rawPhone.slice(2,7)}-${rawPhone.slice(7,11)}`;
+  const customerPhone = rawPhone.startsWith("55") ? `+${rawPhone}` : `+55${rawPhone}`;
   const cpfRaw        = (body.cpf || body.document || body.customer_cpf || "").toString().replace(/\D/g, "");
   const customerCpf   = cpfRaw.length === 11 ? cpfRaw : gerarCpfValido();
 
-  const identifier = `pedido-${randId}-${Date.now()}`;
-  const dueDate    = new Date(Date.now() + 86400000).toISOString().split("T")[0];
-
   const payload = {
-    identifier,
-    amount:   amountReais,
-    dueDate,
-    client: {
+    amount:        amountCents,
+    description:   "Livro Falante",
+    paymentMethod: "pix",
+    customer: {
       name:     customerName,
       email:    customerEmail,
-      phone:    customerPhone,
       document: customerCpf,
+      phone:    customerPhone,
     },
-    products: [{
-      id:       "livro-falante-001",
-      name:     "Livro Falante",
-      quantity: 1,
-      price:    amountReais,
-    }],
   };
 
   const headers = {
-    "Content-Type":  "application/json",
-    "x-public-key":  POSEIDON_PUBLIC_KEY,
-    "x-secret-key":  POSEIDON_SECRET_KEY,
+    "Content-Type": "application/json",
+    "X-API-Key":    SIGMA_API_KEY,
   };
 
   let resp;
   try {
-    resp = await postWithRetry(POSEIDON_BASE, payload, headers);
+    resp = await postWithRetry(`${SIGMA_BASE}/direct-payments`, payload, headers);
   } catch (err) {
     return jsonResponse(502, { success: false, error: "Falha ao conectar com gateway: " + String(err) });
   }
@@ -134,20 +123,21 @@ exports.handler = async (event) => {
     return jsonResponse(resp.status, { success: false, error: text || "Erro ao criar cobrança PIX", raw: text });
   }
 
-  let data = {};
-  try { data = JSON.parse(text); } catch {
+  let parsed = {};
+  try { parsed = JSON.parse(text); } catch {
     return jsonResponse(500, { success: false, error: "Resposta inválida da gateway", raw: text });
   }
 
-  const transactionId = data.transactionId || data.order?.id || null;
-  const pixCode       = data.pix?.code || null;
-  const qrCodeImage   = data.pix?.base64 || data.pix?.image || null;
+  const data = parsed.data || parsed;
+
+  const transactionId = data.transaction_id || data.id || null;
+  const pixCode       = data.payment_data?.pix_key || data.pix_code || data.brcode || null;
 
   try {
     const supabase = getSupabase();
     await supabase.from("transactions").insert({
       transaction_id: transactionId,
-      amount:         amountReais,
+      amount:         amountCents / 100,
       customer_name:  customerName,
       customer_email: customerEmail,
       customer_cpf:   customerCpf,
@@ -163,7 +153,7 @@ exports.handler = async (event) => {
     pix_code:       pixCode,
     brcode:         pixCode,
     payload:        pixCode,
-    qr_code_image:  qrCodeImage,
+    qr_code_image:  null,
     transaction_id: transactionId,
     transactionId,
     deposit_id:     transactionId,
