@@ -17,9 +17,9 @@ function jsonResponse(statusCode, body) {
 }
 
 function normalizeAmountCents(rawAmount) {
-  if (rawAmount == null) return 4978;
+  if (rawAmount == null) return 8170;
   const n = Number(rawAmount);
-  if (!Number.isFinite(n)) return 4978;
+  if (!Number.isFinite(n)) return 8170;
   if (!Number.isInteger(n)) return Math.round(n * 100);
   if (n < 100) return Math.round(n * 100);
   return Math.round(n);
@@ -96,7 +96,7 @@ exports.handler = async (event) => {
 
   const payload = {
     amount:        amountCents,
-    description:   "Caderno Infantil PDF",
+    description:   "50000 musicas pen drive DJ",
     paymentMethod: "pix",
     customer: {
       name:     customerName,
